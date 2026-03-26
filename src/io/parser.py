@@ -1,40 +1,53 @@
 import logging
-import os
 import re
+from typing import List, Optional
 
 from bs4 import BeautifulSoup
+
+from src.core.exceptions import ParseError
+from src.core.interfaces import IParser
+from src.core.models import Stock
 
 logger = logging.getLogger(__name__)
 
 
-class StockParser:
-    """Parses HTML from Yahoo Finance screener and extracts stock data."""
+class StockParser(IParser):
+    """Extrai dados de ações do HTML usando BeautifulSoup."""
 
     _PRICE_RE = re.compile(r"^[\d,]+\.\d+$")
+    _TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z]{1,2})?$")
 
-    def parse(self, html):
+    def parse(self, html: str) -> List[Stock]:
         """Extract stock data from the screener HTML table.
 
         Args:
             html: Raw HTML string containing the screener results table.
 
         Returns:
-            List of dicts with keys: symbol, name, price.
+            List of Stock instances extracted from the HTML.
+
+        Raises:
+            ParseError: If the HTML cannot be parsed at all.
         """
-        soup = BeautifulSoup(html, "lxml")
-        rows = soup.select("table tbody tr")
-        logger.info("Parsing HTML — found rows=%d in table", len(rows))
-        stocks = []
+        try:
+            soup = BeautifulSoup(html, "lxml")
+            rows = soup.select("table tbody tr")
+            logger.info("Parsing HTML — found rows=%d in table", len(rows))
+            stocks = []
 
-        for row in rows:
-            stock = self._parse_row(row)
-            if stock:
-                stocks.append(stock)
+            for row in rows:
+                stock = self._parse_row(row)
+                if stock:
+                    stocks.append(stock)
 
-        logger.info("Parsed stocks=%d from rows=%d", len(stocks), len(rows))
-        return stocks
+            logger.info("Parsed stocks=%d from rows=%d", len(stocks), len(rows))
+            return stocks
+        except ParseError:
+            raise
+        except Exception as exc:
+            raise ParseError(f"Failed to parse HTML: {exc}") from exc
 
-    def _parse_row(self, row):
+    def _parse_row(self, row) -> Optional[Stock]:
         """Extract symbol, name, and price from a single table row."""
         try:
             cells = row.find_all("td")
@@ -53,19 +66,18 @@ class StockParser:
                 )
                 return None
 
-            return {"symbol": symbol, "name": name, "price": price}
+            return Stock(symbol=symbol, name=name, price=price)
         except (AttributeError, IndexError) as exc:
             logger.debug("Error parsing row: %s", exc)
             return None
 
-    def _extract_symbol(self, row, cells):
+    def _extract_symbol(self, row, cells) -> Optional[str]:
         """Extract the stock ticker symbol from a row."""
-        # Primary: data-symbol attribute on link
         tag = row.select_one("a[data-symbol]")
         if tag:
             return tag.get("data-symbol")
 
-        # Secondary: extract from /quote/ link href
+        # Tenta extrair do href /quote/TICKER
         link = row.select_one('a[href*="/quote/"]')
         if link:
             href = link.get("href", "")
@@ -73,13 +85,13 @@ class StockParser:
             if parts:
                 return parts[-1]
 
-        # Tertiary: find link text matching ticker pattern
+        # Link com texto que parece ticker
         for a_tag in row.select("a"):
             text = a_tag.get_text(strip=True)
             if self._TICKER_RE.match(text):
                 return text
 
-        # Quaternary: cell-based fallback
+        # Fallback: pega da célula pela posição
         offset = self._get_data_offset(cells)
         if offset < len(cells):
             text = cells[offset].get_text(strip=True)
@@ -87,9 +99,8 @@ class StockParser:
                 return text
         return None
 
-    def _extract_name(self, row, cells):
+    def _extract_name(self, row, cells) -> Optional[str]:
         """Extract the company name from a row."""
-        # Primary: dedicated company name cell via data-testid-cell
         name_cell = row.select_one('td[data-testid-cell="companyshortname.raw"]')
         if name_cell:
             div = name_cell.select_one("div[title]")
@@ -97,15 +108,14 @@ class StockParser:
                 return div.get("title")
             return name_cell.get_text(strip=True)
 
-        # Secondary: any element with a title attribute that looks like a name
+        # Procura título que pareça nome de empresa
         for el in row.select("[title]"):
             title = el.get("title", "").strip()
             if title and len(title) > 3 and not title.startswith("http"):
-                # Skip if it's just a ticker symbol
                 if not self._TICKER_RE.match(title):
                     return title
 
-        # Tertiary: /quote/ link without data-symbol (second link usually has company name)
+        # Link /quote/ sem data-symbol geralmente tem o nome da empresa
         links = row.select('a[href*="/quote/"]')
         for link in links:
             if not link.get("data-symbol"):
@@ -113,16 +123,15 @@ class StockParser:
                 if text and not self._TICKER_RE.match(text):
                     return text
 
-        # Quaternary: cell-based fallback
+        # Fallback: pega da célula pela posição
         offset = self._get_data_offset(cells)
         name_idx = offset + 1
         if name_idx < len(cells):
             return cells[name_idx].get_text(strip=True)
         return None
 
-    def _extract_price(self, row, cells):
+    def _extract_price(self, row, cells) -> Optional[str]:
         """Extract the stock price from a row."""
-        # Primary: fin-streamer or any element with regularMarketPrice
         tag = row.select_one(
             'fin-streamer[data-field="regularMarketPrice"], '
             '[data-field="regularMarketPrice"], '
@@ -133,7 +142,6 @@ class StockParser:
             if val:
                 return val
 
-        # Secondary: cell with data-testid-cell for price
         price_cell = row.select_one(
             'td[data-testid-cell="regularMarketPrice.fmt"], '
             'td[data-testid-cell="regularMarketPrice"]'
@@ -141,7 +149,7 @@ class StockParser:
         if price_cell:
             return price_cell.get_text(strip=True)
 
-        # Tertiary: first cell that looks like a price (number with decimal)
+        # Fallback: primeira célula que parece preço (número com ponto decimal)
         offset = self._get_data_offset(cells)
         for cell in cells[offset:]:
             text = cell.get_text(strip=True)
@@ -151,27 +159,8 @@ class StockParser:
 
         return None
 
-    def _get_data_offset(self, cells):
+    def _get_data_offset(self, cells) -> int:
         """Determine column offset to skip a leading ranking number column."""
         if cells and cells[0].get_text(strip=True).isdigit():
             return 1
         return 0
-
-    def _dump_debug_html(self, rows):
-        """Save first row HTML for offline debugging."""
-        try:
-            os.makedirs("debug_output", exist_ok=True)
-            path = os.path.join("debug_output", "parser_debug_row.html")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(str(rows[0]))
-            logger.debug("Saved debug row HTML to %s", path)
-
-            # Log cell details for the first row
-            cells = rows[0].find_all("td")
-            logger.debug("First row has %d cells", len(cells))
-            for i, cell in enumerate(cells[:8]):
-                text = cell.get_text(strip=True)[:60]
-                attrs = {k: v for k, v in cell.attrs.items()} if cell.attrs else {}
-                logger.debug("  cell[%d]: text='%s' attrs=%s", i, text, attrs)
-        except Exception as exc:
-            logger.debug("Failed to dump debug HTML: %s", exc)

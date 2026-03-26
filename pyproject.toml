@@ -9,7 +9,6 @@ package-mode = false
 python = ">=3.10,<4.0"
 selenium = ">=4.0"
 beautifulsoup4 = ">=4.12"
-webdriver-manager = ">=4.0"
 lxml = ">=5.0"
 
 [tool.poetry.group.dev.dependencies]

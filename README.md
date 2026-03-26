@@ -13,7 +13,7 @@ Teste técnico — **Desenvolvedor Python Sênior** na **Verx**.
 **Pré-requisito:** Google Chrome instalado (Selenium 4 gerencia o ChromeDriver automaticamente).
 
 ```bash
-git clone https://github.com/<usuario>/teste-tecnico-verx.git
+git clone [https://github.com/pradovncs/teste-tecnico-verx.git]
 cd teste-tecnico-verx
 
 # Com Poetry

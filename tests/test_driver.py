@@ -12,7 +12,7 @@ class TestBrowserDriverInit:
     def test_creates_driver_with_headless(self, mock_service, mock_chrome, mock_manager):
         driver = BrowserDriver(headless=True)
         options_used = mock_chrome.call_args[1]["options"]
-        assert "--headless" in options_used.arguments
+        assert "--headless=new" in options_used.arguments
         driver.quit()
 
     @patch("src.driver.ChromeDriverManager")
@@ -21,7 +21,7 @@ class TestBrowserDriverInit:
     def test_creates_driver_without_headless(self, mock_service, mock_chrome, mock_manager):
         driver = BrowserDriver(headless=False)
         options_used = mock_chrome.call_args[1]["options"]
-        assert "--headless" not in options_used.arguments
+        assert "--headless=new" not in options_used.arguments
         driver.quit()
 
 

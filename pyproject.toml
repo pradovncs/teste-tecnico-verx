@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "yahoo-finance-crawler"
+name = "cadesp-crawler"
 version = "0.1.0"
-description = "Yahoo Finance Stock Crawler - Selenium + BeautifulSoup"
+description = "Crawler do CADESP (SEFAZ-SP) — consulta pública por CNPJ com captcha via AntiCaptcha"
 readme = "README.md"
 package-mode = false
 
@@ -10,6 +10,8 @@ python = ">=3.10,<4.0"
 selenium = ">=4.0"
 beautifulsoup4 = ">=4.12"
 lxml = ">=5.0"
+anticaptchaofficial = ">=1.0.46"
+undetected-chromedriver = ">=3.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0"

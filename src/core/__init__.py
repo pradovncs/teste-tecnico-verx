@@ -1,27 +1,38 @@
 from src.core.config import CrawlerConfig, setup_logging
 from src.core.exceptions import (
+    BlockedError,
+    CaptchaError,
+    ConsultaError,
     CrawlerError,
     ExportError,
-    FilterError,
+    InvalidCNPJError,
     NavigationError,
-    PaginationError,
     ParseError,
 )
-from src.core.interfaces import ICrawler, IDriver, IExporter, IParser
-from src.core.models import Stock
+from src.core.interfaces import (
+    ICaptchaSolver,
+    ICrawler,
+    IDriver,
+    IExporter,
+    IParser,
+)
+from src.core.models import Contribuinte
 
 __all__ = [
     "CrawlerConfig",
     "setup_logging",
     "CrawlerError",
     "ExportError",
-    "FilterError",
+    "CaptchaError",
+    "ConsultaError",
+    "BlockedError",
+    "InvalidCNPJError",
     "NavigationError",
-    "PaginationError",
     "ParseError",
+    "ICaptchaSolver",
     "ICrawler",
     "IDriver",
     "IExporter",
     "IParser",
-    "Stock",
+    "Contribuinte",
 ]

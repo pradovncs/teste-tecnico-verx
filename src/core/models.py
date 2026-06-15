@@ -1,20 +1,30 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from typing import Dict
 
 
 @dataclass
-class Stock:
-    """Represents a stock extracted from the Yahoo Finance screener."""
+class Contribuinte:
+    """Representa um contribuinte retornado pela Consulta Pública do CADESP.
 
-    symbol: str
-    name: str
-    price: str
+    A página da SEFAZ-SP retorna os dados cadastrais em pares rótulo/valor.
+    Os campos mais comuns são mapeados explicitamente; quaisquer outros campos
+    extraídos do resultado ficam em ``extras`` para não perder informação.
+    """
+
+    cnpj: str
+    inscricao_estadual: str = ""
+    nome_empresarial: str = ""
+    situacao_cadastral: str = ""
+    extras: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.symbol or not self.symbol.strip():
-            raise ValueError("Stock symbol cannot be empty")
-        if not self.name or not self.name.strip():
-            raise ValueError("Stock name cannot be empty")
+        if not self.cnpj or not self.cnpj.strip():
+            raise ValueError("CNPJ do contribuinte não pode ser vazio")
 
     def to_dict(self) -> dict:
-        """Convert to a plain dictionary."""
-        return asdict(self)
+        """Converte para um dicionário plano (extras achatados no topo)."""
+        data = asdict(self)
+        extras = data.pop("extras", {}) or {}
+        # Campos mapeados têm precedência sobre extras de mesmo nome.
+        merged = {**extras, **{k: v for k, v in data.items()}}
+        return merged

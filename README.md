@@ -1,8 +1,12 @@
-# Yahoo Finance Stock Crawler
+# CADESP CNPJ Crawler
 
-Crawler que extrai dados de ações do [Yahoo Finance Equity Screener](https://finance.yahoo.com/research-hub/screener/equity/) filtrando por região.
+Crawler que extrai dados da [Consulta Pública do CADESP](https://www.cadesp.fazenda.sp.gov.br/Pages/Cadastro/Consultas/ConsultaPublica/ConsultaPublica.aspx) (Cadastro de Contribuintes do ICMS — SEFAZ-SP), filtrando **por CNPJ** no dropdown de tipo de consulta.
 
-O Yahoo Finance renderiza a tabela de ações via JavaScript, então um `requests.get()` na URL retorna HTML vazio. Por isso o projeto usa **Selenium** pra carregar a página e interagir com filtros, e **BeautifulSoup** pra extrair os dados do HTML renderizado.
+O site é um **ASP.NET Web Forms** protegido por um firewall **F5 BIG-IP** (inspeção de fingerprint do navegador) e exige a resolução de um **captcha de imagem**. Por isso o projeto usa:
+
+- **Selenium** (com `undetected-chromedriver` quando disponível) para dirigir um Chrome o mais "stealth" possível e contornar o bloqueio do F5 BIG-IP.
+- **AntiCaptcha** (`anticaptchaofficial`, tarefa *Image-to-Text*) para resolver o captcha.
+- **BeautifulSoup + lxml** para parsear o resultado.
 
 Teste técnico — **Desenvolvedor Python Sênior** na **Verx**.
 
@@ -10,27 +14,32 @@ Teste técnico — **Desenvolvedor Python Sênior** na **Verx**.
 
 ## Como executar
 
-**Pré-requisito:** Google Chrome instalado (Selenium 4 gerencia o ChromeDriver automaticamente).
+**Pré-requisito:** Google Chrome instalado e uma chave de API do [Anti-Captcha](https://anti-captcha.com/).
 
 ```bash
-git clone [https://github.com/pradovncs/teste-tecnico-verx.git]
+git clone https://github.com/pradovncs/teste-tecnico-verx.git
 cd teste-tecnico-verx
 
 # Com Poetry
 poetry install
-poetry run python main.py --region "Brazil"
+export ANTICAPTCHA_KEY="sua_chave_aqui"
+poetry run python main.py --cnpj "11.222.333/0001-81"
 
 # Com pip
 pip install -r requirements.txt
-python main.py --region "Brazil"
+export ANTICAPTCHA_KEY="sua_chave_aqui"
+python main.py --cnpj "11.222.333/0001-81"
 ```
 
 ### Parâmetros
 
 | Parâmetro | Obrigatório | Descrição |
 |---|---|---|
-| `--region` | Sim | Região pra filtrar (ex.: `"Brazil"`, `"Argentina"`, `"United States"`) |
-| `--output` | Não | Caminho do CSV (padrão: `output/stocks.csv`) |
+| `--cnpj` | Sim | CNPJ a consultar (com ou sem máscara) |
+| `--api-key` | Não | Chave da API do AntiCaptcha (padrão: variável `ANTICAPTCHA_KEY`) |
+| `--output` | Não | Caminho do arquivo de saída `.csv`/`.json` (padrão: `output/cadesp.csv`) |
+| `--no-headless` | Não | Abre o navegador com interface gráfica (depuração) |
+| `--no-stealth` | Não | Desativa as contramedidas anti-detecção (depuração) |
 | `--log-level` | Não | `DEBUG`, `INFO`, `WARNING`, `ERROR` (padrão: `INFO`) |
 
 ---
@@ -44,15 +53,16 @@ poetry run pytest tests/ -v
 poetry run pytest tests/ --cov=src --cov-report=term-missing
 ```
 
-118 testes cobrindo parsing, exportação, filtro de região, paginação, driver, exceções e o fluxo do crawler. Todos rodam sem abrir navegador (mocks do Selenium).
+Os testes rodam sem abrir navegador real nem acessar a rede (Selenium e AntiCaptcha são mockados).
 
 ---
 
 ## Tecnologias
 
 - **Python 3.10+**
-- **Selenium 4** — automação do Chrome pra carregar páginas dinâmicas e interagir com filtros/paginação
-- **BeautifulSoup 4 + lxml** — parsing do HTML renderizado
+- **Selenium 4** + **undetected-chromedriver** — automação stealth do Chrome
+- **anticaptchaofficial** — resolução do captcha de imagem
+- **BeautifulSoup 4 + lxml** — parsing do HTML de resultado
 - **Poetry** — dependências e virtualenv
 - **pytest** — testes unitários
 
@@ -63,21 +73,23 @@ poetry run pytest tests/ --cov=src --cov-report=term-missing
 ```
 src/
 ├── core/                  # Interfaces, exceções, config, modelos
-│   ├── interfaces.py      # ABCs: IDriver, IParser, IExporter, ICrawler
-│   ├── exceptions.py      # CrawlerError → NavigationError, ParseError, etc.
+│   ├── interfaces.py      # ABCs: IDriver, ICaptchaSolver, IParser, IExporter, ICrawler
+│   ├── exceptions.py      # CrawlerError → Captcha/Consulta/Blocked/InvalidCNPJ/...
 │   ├── config.py          # CrawlerConfig (dataclass frozen)
-│   └── models.py          # Stock (dataclass com validação)
+│   ├── models.py          # Contribuinte (dataclass)
+│   └── cnpj.py            # Validação/normalização de CNPJ
+├── captcha/
+│   └── solver.py          # AntiCaptchaSolver (anticaptchaofficial)
 ├── scraping/              # Automação do navegador
-│   ├── driver.py          # BrowserDriver — wrapper do Selenium
-│   ├── consent_handler.py # Fecha banners de cookies
-│   ├── region_filter.py   # Aplica filtro de região no screener
-│   └── paginator.py       # Navega páginas + deduplicação
+│   ├── driver.py          # StealthBrowserDriver — Selenium stealth
+│   ├── stealth.py         # Argumentos e script anti-fingerprint (F5 BIG-IP)
+│   └── consulta.py        # CnpjConsulta — dropdown + CNPJ + captcha + submit
 ├── io/
-│   ├── parser.py          # StockParser — HTML → lista de Stock
-│   └── exporter.py        # CSVExporter — Stock → CSV
-└── crawler.py             # YahooFinanceCrawler — orquestra tudo
+│   ├── parser.py          # ConsultaParser — HTML → Contribuinte
+│   └── exporter.py        # CSVExporter — CSV/JSON
+└── crawler.py             # CadespCrawler — orquestra tudo
 
-tests/                     # 118 testes (mocks, sem browser real)
+tests/                     # Testes (mocks, sem browser/rede real)
 main.py                    # CLI
 ```
 
@@ -85,56 +97,47 @@ main.py                    # CLI
 
 ## Decisões Técnicas
 
-### Por que Selenium + BeautifulSoup juntos?
+### Stealth contra o F5 BIG-IP
 
-O Yahoo Finance é uma SPA — a tabela de ações só aparece depois que o JavaScript executa. Um `requests.get()` na URL retorna HTML sem nenhum dado útil.
+O F5 BIG-IP ASM bloqueia automações detectando sinais como `navigator.webdriver`, ausência de plugins/idiomas e a flag `enable-automation` do Chrome. As contramedidas em `scraping/stealth.py` e `scraping/driver.py`:
 
-O **Selenium** resolve isso: abre o Chrome headless, espera renderizar, interage com o dropdown de região, clica em Apply, navega entre páginas. Mas usar Selenium puro pra extrair dados de tabelas é verboso (`find_elements` repetido pra cada célula, sem suporte a CSS selectors complexos).
+- Usam `undetected-chromedriver` quando instalado (recai sobre Selenium puro caso contrário).
+- Removem `enable-automation` e `--disable-blink-features=AutomationControlled`.
+- Injetam, via CDP (`Page.addScriptToEvaluateOnNewDocument`), um script que mascara `navigator.webdriver`, `languages` (pt-BR), `plugins`, `chrome.runtime` e o renderer WebGL.
+- Definem User-Agent e locale realistas e aplicam **atrasos aleatórios** e digitação caractere a caractere para imitar comportamento humano.
 
-Então depois que o Selenium carrega a página, pego o `page_source` e passo pro **BeautifulSoup** com parser `lxml`. O parsing fica mais limpo:
+Quando o firewall ainda assim bloqueia, a resposta contém o texto *"The requested URL was rejected… Support ID"*; isso é detectado e levanta `BlockedError` (sem retentar imediatamente).
 
-```python
-html = driver.get_html()
-soup = BeautifulSoup(html, "lxml")
-rows = soup.select("table tbody tr")
-```
+### Captcha com AntiCaptcha
 
-Cada um faz o que faz melhor — Selenium navega, BS4 parseia.
+A imagem do captcha é capturada como screenshot do próprio elemento (`screenshot_as_png`) e enviada ao Anti-Captcha em base64 (`solve_and_return_solution_from_string`). Captchas recusados disparam `CaptchaError` e o crawler **tenta novamente** até `max_captcha_attempts` vezes, recarregando a página a cada tentativa.
 
 ### Arquitetura e OOP
 
-O projeto usa interfaces via ABCs (`IDriver`, `IParser`, `IExporter`, `ICrawler`) e injeção de dependências. O `YahooFinanceCrawler` recebe driver, parser e exporter como parâmetros opcionais — se não passar nada, cria as implementações padrão. Isso facilita testar com mocks sem precisar abrir navegador.
-
-As responsabilidades ficam separadas: `BrowserDriver` só navega, `StockParser` só extrai dados de HTML, `RegionFilter` só aplica filtro, `Paginator` só pagina e deduplica. O crawler orquestra.
+Interfaces via ABCs (`IDriver`, `ICaptchaSolver`, `IParser`, `IExporter`, `ICrawler`) e injeção de dependências. O `CadespCrawler` recebe driver, solver, parser e exporter opcionais — se nada for passado, cria as implementações padrão. Isso permite testar todo o fluxo com mocks, sem navegador nem chamadas de rede.
 
 ### Exceções
-
-Hierarquia com `CrawlerError` como base, permitindo `except CrawlerError` no CLI pra capturar qualquer erro de domínio:
 
 ```
 CrawlerError
 ├── NavigationError
 ├── ParseError
 ├── ExportError
-├── FilterError
-└── PaginationError
+├── CaptchaError
+├── ConsultaError
+├── BlockedError
+└── InvalidCNPJError
 ```
 
-### Waits explícitos
+### Validação de CNPJ
 
-Substituí `time.sleep()` por `WebDriverWait` + Expected Conditions do Selenium. Em vez de esperar 5s fixos torcendo pra página ter carregado, o código espera até o elemento aparecer (ou desaparecer, no caso do banner de cookies). Mais rápido e confiável.
-
-### Stock como dataclass
-
-Modelo `Stock` é dataclass com validação no `__post_init__` — symbol e name não podem ser vazios. Garante tipagem, igualdade por valor nos testes e conversão pra dict via `to_dict()`.
+O CNPJ é normalizado e validado pelo algoritmo oficial dos dígitos verificadores antes de qualquer interação com o site, evitando gastar captcha com entradas inválidas.
 
 ---
 
 ## Exemplo de Saída
 
 ```csv
-"symbol","name","price"
-"PETR4.SA","Petróleo Brasileiro S.A. - Petrobras","38.50"
-"VALE3.SA","Vale S.A.","62.30"
-"ITUB4.SA","Itaú Unibanco Holding S.A.","8.05"
+"cnpj","inscricao_estadual","nome_empresarial","situacao_cadastral","municipio"
+"11.222.333/0001-81","111.111.111.111","EMPRESA EXEMPLO LTDA","Ativo","SAO PAULO"
 ```

@@ -14,9 +14,17 @@ class ExportError(CrawlerError):
     """Raised when data export fails."""
 
 
-class FilterError(CrawlerError):
-    """Raised when region filter application fails."""
+class CaptchaError(CrawlerError):
+    """Raised when the image captcha cannot be solved."""
 
 
-class PaginationError(CrawlerError):
-    """Raised when page navigation fails."""
+class ConsultaError(CrawlerError):
+    """Raised when the CNPJ consultation form cannot be submitted."""
+
+
+class BlockedError(CrawlerError):
+    """Raised when the site (F5 BIG-IP firewall) blocks the request."""
+
+
+class InvalidCNPJError(CrawlerError):
+    """Raised when the provided CNPJ is invalid."""

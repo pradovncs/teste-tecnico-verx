@@ -1,143 +1,138 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.core.config import CrawlerConfig
-from src.crawler import YahooFinanceCrawler
-from src.core.models import Stock
+from src.core.exceptions import BlockedError, CaptchaError
+from src.core.models import Contribuinte
+from src.crawler import CadespCrawler
+
+VALID = "11.222.333/0001-81"
 
 
-@patch("src.crawler.Paginator")
-@patch("src.crawler.RegionFilter")
-@patch("src.crawler.ConsentHandler")
-class TestYahooFinanceCrawlerCrawl:
-    """Tests for the main crawl orchestration flow."""
+def _contrib():
+    return [Contribuinte(cnpj="11222333000181", nome_empresarial="ACME")]
 
-    def test_opens_base_url(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        config = CrawlerConfig()
-        mock_driver = MagicMock()
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = []
 
-        crawler = YahooFinanceCrawler(config=config, driver=mock_driver)
-        crawler.crawl("Brazil", output_path=None)
+@patch("src.crawler.CnpjConsulta")
+class TestCrawl:
+    def test_opens_base_url(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock(); parser.parse.return_value = []
+        mock_consulta_cls.return_value.run.return_value = "<html></html>"
 
-        mock_driver.open.assert_called_once_with(config.base_url)
+        crawler = CadespCrawler(driver=driver, solver=MagicMock(), parser=parser)
+        crawler.crawl(VALID, output_path="")
 
-    def test_delegates_to_consent_handler(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        mock_driver = MagicMock()
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = []
+        driver.open.assert_called_with(CrawlerConfig().base_url)
 
-        crawler = YahooFinanceCrawler(driver=mock_driver)
-        crawler.crawl("Brazil", output_path=None)
+    def test_returns_parsed_results(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock(); parser.parse.return_value = _contrib()
+        mock_consulta_cls.return_value.run.return_value = "<html>x</html>"
 
-        mock_consent_cls.assert_called_once_with(mock_driver)
-        mock_consent_cls.return_value.dismiss.assert_called_once()
+        crawler = CadespCrawler(driver=driver, solver=MagicMock(), parser=parser)
+        result = crawler.crawl(VALID, output_path="")
 
-    def test_delegates_to_region_filter(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        mock_driver = MagicMock()
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = []
+        assert result == _contrib()
 
-        crawler = YahooFinanceCrawler(driver=mock_driver)
-        crawler.crawl("Brazil", output_path=None)
+    def test_exports_results(self, mock_consulta_cls, tmp_path):
+        driver = MagicMock()
+        parser = MagicMock(); parser.parse.return_value = _contrib()
+        exporter = MagicMock()
+        mock_consulta_cls.return_value.run.return_value = "<html>x</html>"
 
-        mock_filter_cls.assert_called_once_with(mock_driver)
-        mock_filter_cls.return_value.apply.assert_called_once_with("Brazil")
+        path = str(tmp_path / "out.csv")
+        crawler = CadespCrawler(driver=driver, solver=MagicMock(), parser=parser, exporter=exporter)
+        crawler.crawl(VALID, output_path=path)
 
-    def test_delegates_to_paginator(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        mock_driver = MagicMock()
-        mock_parser = MagicMock()
-        stocks = [Stock(symbol="A", name="A Corp", price="10")]
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = stocks
+        exporter.export.assert_called_once_with(_contrib(), path)
 
-        crawler = YahooFinanceCrawler(driver=mock_driver, parser=mock_parser)
-        result = crawler.crawl("Brazil", output_path=None)
+    def test_skips_export_when_empty_path(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock(); parser.parse.return_value = _contrib()
+        exporter = MagicMock()
+        mock_consulta_cls.return_value.run.return_value = "<html>x</html>"
 
-        mock_paginator_cls.assert_called_once_with(mock_driver, mock_parser)
-        mock_paginator_cls.return_value.wait_for_table.assert_called_once()
-        mock_paginator_cls.return_value.set_page_size.assert_called_once_with(100)
-        mock_paginator_cls.return_value.scrape_all_pages.assert_called_once()
-        assert result == stocks
+        crawler = CadespCrawler(driver=driver, solver=MagicMock(), parser=parser, exporter=exporter)
+        crawler.crawl(VALID, output_path="")
 
-    def test_calls_exporter_with_data_and_path(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls, tmp_path):
-        mock_driver = MagicMock()
-        stocks = [Stock(symbol="TEST", name="Test Corp", price="100.00")]
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = stocks
-        mock_exporter = MagicMock()
+        exporter.export.assert_not_called()
 
-        filepath = str(tmp_path / "output.csv")
-        crawler = YahooFinanceCrawler(driver=mock_driver, exporter=mock_exporter)
-        crawler.crawl("Brazil", output_path=filepath)
+    def test_does_not_quit_injected_driver(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock(); parser.parse.return_value = []
+        mock_consulta_cls.return_value.run.return_value = "<html></html>"
 
-        mock_exporter.export.assert_called_once_with(stocks, filepath)
+        crawler = CadespCrawler(driver=driver, solver=MagicMock(), parser=parser)
+        crawler.crawl(VALID, output_path="")
 
-    def test_returns_parsed_stocks(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        mock_driver = MagicMock()
-        expected = [
-            Stock(symbol="AMX.BA", name="América Móvil", price="2089.00"),
-            Stock(symbol="NOKA.BA", name="Nokia Corporation", price="557.50"),
+        driver.quit.assert_not_called()
+
+    def test_retries_on_captcha_error(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock(); parser.parse.return_value = _contrib()
+        # primeira tentativa falha o captcha, segunda funciona
+        mock_consulta_cls.return_value.run.side_effect = [
+            CaptchaError("recusado"),
+            "<html>ok</html>",
         ]
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = expected
+        config = CrawlerConfig(max_captcha_attempts=3)
 
-        crawler = YahooFinanceCrawler(driver=mock_driver)
-        result = crawler.crawl("Brazil", output_path=None)
+        crawler = CadespCrawler(config=config, driver=driver, solver=MagicMock(), parser=parser)
+        result = crawler.crawl(VALID, output_path="")
 
-        assert result == expected
+        assert result == _contrib()
+        assert mock_consulta_cls.return_value.run.call_count == 2
 
-    def test_uses_config_default_output(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        mock_driver = MagicMock()
-        stocks = [Stock(symbol="A", name="A Corp", price="10")]
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = stocks
-        mock_exporter = MagicMock()
+    def test_gives_up_after_max_attempts(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock()
+        mock_consulta_cls.return_value.run.side_effect = CaptchaError("recusado")
+        config = CrawlerConfig(max_captcha_attempts=2)
 
-        crawler = YahooFinanceCrawler(driver=mock_driver, exporter=mock_exporter)
-        crawler.crawl("Brazil")
+        crawler = CadespCrawler(config=config, driver=driver, solver=MagicMock(), parser=parser)
+        with pytest.raises(CaptchaError):
+            crawler.crawl(VALID, output_path="")
+        assert mock_consulta_cls.return_value.run.call_count == 2
 
-        mock_exporter.export.assert_called_once_with(stocks, CrawlerConfig().output_path)
+    def test_blocked_not_retried(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock()
+        mock_consulta_cls.return_value.run.side_effect = BlockedError("f5")
+        config = CrawlerConfig(max_captcha_attempts=3)
 
-    def test_skips_export_when_output_path_is_empty(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        mock_driver = MagicMock()
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = []
-        mock_exporter = MagicMock()
-
-        crawler = YahooFinanceCrawler(driver=mock_driver, exporter=mock_exporter)
-        crawler.crawl("Brazil", output_path="")
-
-        mock_exporter.export.assert_not_called()
-
-    def test_does_not_quit_injected_driver(self, mock_consent_cls, mock_filter_cls, mock_paginator_cls):
-        mock_driver = MagicMock()
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = []
-
-        crawler = YahooFinanceCrawler(driver=mock_driver)
-        crawler.crawl("Brazil", output_path=None)
-
-        mock_driver.quit.assert_not_called()
+        crawler = CadespCrawler(config=config, driver=driver, solver=MagicMock(), parser=parser)
+        with pytest.raises(BlockedError):
+            crawler.crawl(VALID, output_path="")
+        assert mock_consulta_cls.return_value.run.call_count == 1
 
 
-class TestYahooFinanceCrawlerDefaults:
-    """Tests for default dependency injection."""
-
-    @patch("src.crawler.Paginator")
-    @patch("src.crawler.RegionFilter")
-    @patch("src.crawler.ConsentHandler")
-    @patch("src.crawler.BrowserDriver")
-    def test_creates_and_quits_driver_when_none_injected(
-        self, mock_driver_cls, mock_consent_cls, mock_filter_cls, mock_paginator_cls
+class TestDefaults:
+    @patch("src.crawler.CnpjConsulta")
+    @patch("src.crawler.AntiCaptchaSolver")
+    @patch("src.crawler.StealthBrowserDriver")
+    def test_creates_and_quits_default_driver(
+        self, mock_driver_cls, mock_solver_cls, mock_consulta_cls
     ):
-        mock_instance = MagicMock()
-        mock_driver_cls.return_value = mock_instance
-        mock_paginator_cls.return_value.scrape_all_pages.return_value = []
+        instance = MagicMock()
+        mock_driver_cls.return_value = instance
+        mock_consulta_cls.return_value.run.return_value = "<html></html>"
+        parser = MagicMock(); parser.parse.return_value = []
 
-        crawler = YahooFinanceCrawler()
-        crawler.crawl("Brazil", output_path="")
+        config = CrawlerConfig(anticaptcha_key="key")
+        crawler = CadespCrawler(config=config, parser=parser)
+        crawler.crawl(VALID, output_path="")
 
         mock_driver_cls.assert_called_once()
-        mock_instance.quit.assert_called_once()
+        mock_solver_cls.assert_called_once_with("key")
+        instance.quit.assert_called_once()
 
-    def test_uses_default_parser_and_exporter(self):
-        crawler = YahooFinanceCrawler()
+    def test_uses_default_parser_exporter(self):
+        crawler = CadespCrawler()
         assert crawler._parser is not None
         assert crawler._exporter is not None
 
-    def test_uses_default_config(self):
-        crawler = YahooFinanceCrawler()
-        assert crawler._config is not None
-        assert crawler._config.base_url == "https://finance.yahoo.com/research-hub/screener/equity/"
+    def test_uses_cadesp_base_url(self):
+        crawler = CadespCrawler()
+        assert "cadesp.fazenda.sp.gov.br" in crawler._config.base_url

@@ -96,16 +96,35 @@ class TestCrawl:
             crawler.crawl(VALID, output_path="")
         assert mock_consulta_cls.return_value.run.call_count == 2
 
-    def test_blocked_not_retried(self, mock_consulta_cls):
+    def test_blocked_is_retried_with_recovery(self, mock_consulta_cls):
+        driver = MagicMock()
+        parser = MagicMock(); parser.parse.return_value = _contrib()
+        # primeiro bloqueio do F5, depois sucesso após recuperar o fingerprint
+        mock_consulta_cls.return_value.run.side_effect = [
+            BlockedError("f5"),
+            "<html>ok</html>",
+        ]
+        config = CrawlerConfig(max_block_attempts=3, block_backoff_base=0)
+
+        crawler = CadespCrawler(config=config, driver=driver, solver=MagicMock(), parser=parser)
+        result = crawler.crawl(VALID, output_path="")
+
+        assert result == _contrib()
+        driver.recover.assert_called_once()
+        assert mock_consulta_cls.return_value.run.call_count == 2
+
+    def test_blocked_gives_up_after_max_block_attempts(self, mock_consulta_cls):
         driver = MagicMock()
         parser = MagicMock()
         mock_consulta_cls.return_value.run.side_effect = BlockedError("f5")
-        config = CrawlerConfig(max_captcha_attempts=3)
+        config = CrawlerConfig(max_block_attempts=2, block_backoff_base=0)
 
         crawler = CadespCrawler(config=config, driver=driver, solver=MagicMock(), parser=parser)
         with pytest.raises(BlockedError):
             crawler.crawl(VALID, output_path="")
-        assert mock_consulta_cls.return_value.run.call_count == 1
+        assert mock_consulta_cls.return_value.run.call_count == 2
+        # recupera apenas entre tentativas, não na última (que desiste)
+        assert driver.recover.call_count == 1
 
 
 class TestDefaults:

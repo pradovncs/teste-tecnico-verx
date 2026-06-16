@@ -49,6 +49,14 @@ class IDriver(ABC):
     def get_html(self) -> str:
         ...
 
+    def recover(self) -> None:
+        """Recupera a sessão após um bloqueio do firewall (ex.: F5 BIG-IP).
+
+        Implementação padrão é um no-op; drivers reais devem recriar o contexto
+        do navegador com uma nova impressão digital. Não é abstrato para não
+        obrigar implementações simples (ou mocks) a defini-lo.
+        """
+
     @abstractmethod
     def quit(self) -> None:
         ...

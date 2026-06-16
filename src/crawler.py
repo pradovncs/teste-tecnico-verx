@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import List, Optional
 
 from src.captcha.solver import AntiCaptchaSolver
@@ -59,6 +60,7 @@ class CadespCrawler(ICrawler):
             stealth_mode=self._config.stealth,
             min_delay=self._config.min_delay,
             max_delay=self._config.max_delay,
+            browser=self._config.browser,
         )
         solver = self._solver or AntiCaptchaSolver(self._config.anticaptcha_key)
 
@@ -76,12 +78,22 @@ class CadespCrawler(ICrawler):
     def _consultar_com_retentativa(
         self, driver: IDriver, solver: ICaptchaSolver, cnpj: str
     ) -> List[Contribuinte]:
-        """Tenta a consulta múltiplas vezes para contornar captcha recusado."""
-        attempts = max(1, self._config.max_captcha_attempts)
-        last_error: Optional[Exception] = None
+        """Tenta a consulta, contornando captcha recusado e bloqueio do BIG-IP.
 
-        for attempt in range(1, attempts + 1):
-            logger.info("Tentativa %d/%d", attempt, attempts)
+        Captcha recusado é tentado novamente recarregando a página. Um bloqueio
+        do F5 BIG-IP dispara a recuperação do driver (novo fingerprint) e um
+        backoff exponencial antes de nova tentativa, sem consumir as tentativas
+        reservadas ao captcha.
+        """
+        captcha_attempts = max(1, self._config.max_captcha_attempts)
+        block_attempts = max(1, self._config.max_block_attempts)
+        last_error: Optional[Exception] = None
+        block_count = 0
+        attempt = 0
+
+        while attempt < captcha_attempts:
+            attempt += 1
+            logger.info("Tentativa %d/%d", attempt, captcha_attempts)
             driver.open(self._config.base_url)
             consulta = CnpjConsulta(driver, solver)
             try:
@@ -91,10 +103,32 @@ class CadespCrawler(ICrawler):
                 last_error = exc
                 logger.warning("Captcha falhou (tentativa %d): %s", attempt, exc)
                 continue
-            except BlockedError:
-                # Bloqueio do firewall não se resolve repetindo de imediato.
-                raise
+            except BlockedError as exc:
+                block_count += 1
+                last_error = exc
+                if block_count >= block_attempts:
+                    logger.error(
+                        "Bloqueio do F5 BIG-IP persistiu após %d tentativa(s)", block_count
+                    )
+                    raise
+                backoff = self._block_backoff(block_count)
+                logger.warning(
+                    "Bloqueio do F5 BIG-IP (%d/%d). Recriando fingerprint e aguardando %.1fs",
+                    block_count,
+                    block_attempts,
+                    backoff,
+                )
+                driver.recover()
+                time.sleep(backoff)
+                # Bloqueio não deve consumir as tentativas reservadas ao captcha.
+                attempt -= 1
 
         raise CaptchaError(
-            f"Não foi possível resolver o captcha em {attempts} tentativas: {last_error}"
+            f"Não foi possível resolver o captcha em {captcha_attempts} tentativas: {last_error}"
         )
+
+    def _block_backoff(self, block_count: int) -> float:
+        """Backoff exponencial (segundos) entre tentativas após um bloqueio."""
+        base = self._config.block_backoff_base
+        delay = base * (2 ** (block_count - 1))
+        return min(delay, self._config.block_backoff_max)

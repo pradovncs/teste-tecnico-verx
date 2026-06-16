@@ -1,166 +1,141 @@
 import logging
 import re
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
 from src.core.exceptions import ParseError
 from src.core.interfaces import IParser
-from src.core.models import Stock
+from src.core.models import Contribuinte
 
 logger = logging.getLogger(__name__)
 
+# Rótulos do CADESP -> atributos mapeados do modelo Contribuinte.
+_FIELD_MAP = {
+    "cnpj": "cnpj",
+    "ie": "inscricao_estadual",
+    "inscricaoestadual": "inscricao_estadual",
+    "nomeempresarial": "nome_empresarial",
+    "razaosocial": "nome_empresarial",
+    "situacaocadastralvigente": "situacao_cadastral",
+    "situacaocadastral": "situacao_cadastral",
+    "situacao": "situacao_cadastral",
+}
 
-class StockParser(IParser):
-    """Extrai dados de ações do HTML usando BeautifulSoup."""
+_NOT_FOUND_MARKERS = (
+    "não foi encontrado",
+    "nao foi encontrado",
+    "nenhum registro",
+    "não há dados",
+)
 
-    _PRICE_RE = re.compile(r"^[\d,]+\.\d+$")
-    _TICKER_RE = re.compile(r"^[A-Z]{1,5}(\.[A-Z]{1,2})?$")
+_KEY_RE = re.compile(r"[^a-z0-9]")
 
-    def parse(self, html: str) -> List[Stock]:
-        """Extract stock data from the screener HTML table.
+
+def _normalize_label(label: str) -> str:
+    """Normaliza um rótulo (sem acento aproximado, sem pontuação, minúsculo)."""
+    text = label.strip().lower()
+    replacements = {
+        "ã": "a", "á": "a", "â": "a", "à": "a",
+        "é": "e", "ê": "e", "í": "i",
+        "ó": "o", "ô": "o", "õ": "o",
+        "ú": "u", "ç": "c",
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return _KEY_RE.sub("", text)
+
+
+class ConsultaParser(IParser):
+    """Extrai os dados cadastrais do HTML de resultado do CADESP."""
+
+    def parse(self, html: str) -> List[Contribuinte]:
+        """Converte o HTML de resultado numa lista de ``Contribuinte``.
 
         Args:
-            html: Raw HTML string containing the screener results table.
+            html: HTML da página após a consulta.
 
         Returns:
-            List of Stock instances extracted from the HTML.
+            Lista com o contribuinte encontrado, ou lista vazia se não houver.
 
         Raises:
-            ParseError: If the HTML cannot be parsed at all.
+            ParseError: Se o HTML não puder ser analisado.
         """
         try:
             soup = BeautifulSoup(html, "lxml")
-            rows = soup.select("table tbody tr")
-            logger.info("Parsing HTML — found rows=%d in table", len(rows))
-            stocks = []
-
-            for row in rows:
-                stock = self._parse_row(row)
-                if stock:
-                    stocks.append(stock)
-
-            logger.info("Parsed stocks=%d from rows=%d", len(stocks), len(rows))
-            return stocks
-        except ParseError:
-            raise
         except Exception as exc:
-            raise ParseError(f"Failed to parse HTML: {exc}") from exc
+            raise ParseError(f"Falha ao analisar o HTML: {exc}") from exc
 
-    def _parse_row(self, row) -> Optional[Stock]:
-        """Extract symbol, name, and price from a single table row."""
-        try:
-            cells = row.find_all("td")
-            if not cells:
-                return None
+        text = soup.get_text(" ", strip=True).lower()
+        if any(marker in text for marker in _NOT_FOUND_MARKERS):
+            logger.info("Consulta sem resultados para o CNPJ informado")
+            return []
 
-            symbol = self._extract_symbol(row, cells)
-            name = self._extract_name(row, cells)
-            price = self._extract_price(row, cells)
+        pairs = self._extract_pairs(soup)
+        if not pairs:
+            logger.info("Nenhum par rótulo/valor extraído do resultado")
+            return []
 
-            if not all([symbol, name, price]):
-                logger.debug(
-                    "Skipping row — symbol=%s name=%s price=%s cells=%d first_cell=%s",
-                    symbol, name, price, len(cells),
-                    cells[0].get_text(strip=True)[:50] if cells else "N/A",
-                )
-                return None
+        contribuinte = self._build_contribuinte(pairs)
+        if contribuinte is None:
+            return []
+        return [contribuinte]
 
-            return Stock(symbol=symbol, name=name, price=price)
-        except (AttributeError, IndexError) as exc:
-            logger.debug("Error parsing row: %s", exc)
+    def _extract_pairs(self, soup) -> Dict[str, str]:
+        """Coleta pares rótulo->valor de tabelas e de spans de label do ASP.NET."""
+        pairs: Dict[str, str] = {}
+
+        # 1) Linhas de tabela com duas células (rótulo | valor).
+        for row in soup.select("table tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) == 2:
+                label = cells[0].get_text(" ", strip=True).rstrip(":")
+                value = cells[1].get_text(" ", strip=True)
+                if label and value:
+                    pairs.setdefault(_normalize_label(label), value)
+
+        # 2) Pares <dt>/<dd>.
+        for dt in soup.find_all("dt"):
+            dd = dt.find_next_sibling("dd")
+            if dd:
+                label = dt.get_text(" ", strip=True).rstrip(":")
+                value = dd.get_text(" ", strip=True)
+                if label and value:
+                    pairs.setdefault(_normalize_label(label), value)
+
+        # 3) Spans gerados pelo ASP.NET (id "...lblNomeEmpresarial" etc.).
+        for span in soup.select('span[id*="lbl"], span[id*="Lbl"]'):
+            span_id = span.get("id", "")
+            key = span_id.split("_")[-1]
+            key = re.sub(r"^lbl", "", key, flags=re.IGNORECASE)
+            value = span.get_text(" ", strip=True)
+            if key and value:
+                pairs.setdefault(_normalize_label(key), value)
+
+        logger.info("Extraídos %d pares rótulo/valor", len(pairs))
+        return pairs
+
+    def _build_contribuinte(self, pairs: Dict[str, str]) -> Optional[Contribuinte]:
+        """Monta o modelo Contribuinte a partir dos pares extraídos."""
+        mapped: Dict[str, str] = {}
+        extras: Dict[str, str] = {}
+
+        for key, value in pairs.items():
+            attr = _FIELD_MAP.get(key)
+            if attr:
+                mapped.setdefault(attr, value)
+            else:
+                extras[key] = value
+
+        cnpj = mapped.get("cnpj", "")
+        if not cnpj:
+            logger.warning("Resultado sem CNPJ identificável — ignorando")
             return None
 
-    def _extract_symbol(self, row, cells) -> Optional[str]:
-        """Extract the stock ticker symbol from a row."""
-        tag = row.select_one("a[data-symbol]")
-        if tag:
-            return tag.get("data-symbol")
-
-        # Tenta extrair do href /quote/TICKER
-        link = row.select_one('a[href*="/quote/"]')
-        if link:
-            href = link.get("href", "")
-            parts = href.rstrip("/").split("/")
-            if parts:
-                return parts[-1]
-
-        # Link com texto que parece ticker
-        for a_tag in row.select("a"):
-            text = a_tag.get_text(strip=True)
-            if self._TICKER_RE.match(text):
-                return text
-
-        # Fallback: pega da célula pela posição
-        offset = self._get_data_offset(cells)
-        if offset < len(cells):
-            text = cells[offset].get_text(strip=True)
-            if text:
-                return text
-        return None
-
-    def _extract_name(self, row, cells) -> Optional[str]:
-        """Extract the company name from a row."""
-        name_cell = row.select_one('td[data-testid-cell="companyshortname.raw"]')
-        if name_cell:
-            div = name_cell.select_one("div[title]")
-            if div:
-                return div.get("title")
-            return name_cell.get_text(strip=True)
-
-        # Procura título que pareça nome de empresa
-        for el in row.select("[title]"):
-            title = el.get("title", "").strip()
-            if title and len(title) > 3 and not title.startswith("http"):
-                if not self._TICKER_RE.match(title):
-                    return title
-
-        # Link /quote/ sem data-symbol geralmente tem o nome da empresa
-        links = row.select('a[href*="/quote/"]')
-        for link in links:
-            if not link.get("data-symbol"):
-                text = link.get_text(strip=True)
-                if text and not self._TICKER_RE.match(text):
-                    return text
-
-        # Fallback: pega da célula pela posição
-        offset = self._get_data_offset(cells)
-        name_idx = offset + 1
-        if name_idx < len(cells):
-            return cells[name_idx].get_text(strip=True)
-        return None
-
-    def _extract_price(self, row, cells) -> Optional[str]:
-        """Extract the stock price from a row."""
-        tag = row.select_one(
-            'fin-streamer[data-field="regularMarketPrice"], '
-            '[data-field="regularMarketPrice"], '
-            'span[data-field="regularMarketPrice"]'
+        return Contribuinte(
+            cnpj=cnpj,
+            inscricao_estadual=mapped.get("inscricao_estadual", ""),
+            nome_empresarial=mapped.get("nome_empresarial", ""),
+            situacao_cadastral=mapped.get("situacao_cadastral", ""),
+            extras=extras,
         )
-        if tag:
-            val = tag.get("data-value") or tag.get_text(strip=True)
-            if val:
-                return val
-
-        price_cell = row.select_one(
-            'td[data-testid-cell="regularMarketPrice.fmt"], '
-            'td[data-testid-cell="regularMarketPrice"]'
-        )
-        if price_cell:
-            return price_cell.get_text(strip=True)
-
-        # Fallback: primeira célula que parece preço (número com ponto decimal)
-        offset = self._get_data_offset(cells)
-        for cell in cells[offset:]:
-            text = cell.get_text(strip=True)
-            cleaned = text.replace(",", "")
-            if self._PRICE_RE.match(cleaned):
-                return text
-
-        return None
-
-    def _get_data_offset(self, cells) -> int:
-        """Determine column offset to skip a leading ranking number column."""
-        if cells and cells[0].get_text(strip=True).isdigit():
-            return 1
-        return 0

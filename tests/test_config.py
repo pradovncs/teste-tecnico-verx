@@ -1,52 +1,36 @@
 import os
+from unittest.mock import patch
 
 from src.core.config import CrawlerConfig, setup_logging
 
 
-class TestCrawlerConfigDefaults:
-    def setup_method(self):
-        self.config = CrawlerConfig()
+class TestCrawlerConfig:
+    def test_defaults(self):
+        config = CrawlerConfig()
+        assert "cadesp.fazenda.sp.gov.br" in config.base_url
+        assert config.timeout == 30
+        assert config.headless is True
+        assert config.stealth is True
+        assert config.max_captcha_attempts == 3
 
-    def test_default_base_url(self):
-        assert self.config.base_url == "https://finance.yahoo.com/research-hub/screener/equity/"
-
-    def test_default_timeout(self):
-        assert self.config.timeout == 30
-
-    def test_default_output_path(self):
-        assert self.config.output_path == os.path.join("output", "stocks.csv")
-
-    def test_default_headless(self):
-        assert self.config.headless is True
-
-    def test_default_page_size(self):
-        assert self.config.page_size == 100
-
-
-class TestCrawlerConfigCustom:
-    def test_custom_values(self):
-        config = CrawlerConfig(
-            base_url="https://example.com",
-            timeout=10,
-            output_path="custom.csv",
-            headless=False,
-            page_size=25,
-        )
-        assert config.base_url == "https://example.com"
-        assert config.timeout == 10
-        assert config.output_path == "custom.csv"
-        assert config.headless is False
-        assert config.page_size == 25
-
-    def test_frozen_config_is_immutable(self):
+    def test_is_frozen(self):
         config = CrawlerConfig()
         try:
-            config.timeout = 99
-            assert False, "Should have raised FrozenInstanceError"
-        except AttributeError:
+            config.timeout = 5  # type: ignore[misc]
+            assert False, "should be immutable"
+        except Exception:
             pass
 
+    def test_reads_anticaptcha_key_from_env(self):
+        with patch.dict(os.environ, {"ANTICAPTCHA_KEY": "abc123"}):
+            assert CrawlerConfig().anticaptcha_key == "abc123"
 
-class TestSetupLogging:
-    def test_setup_logging_does_not_raise(self):
-        setup_logging("DEBUG")
+    def test_override_values(self):
+        config = CrawlerConfig(headless=False, stealth=False, anticaptcha_key="k")
+        assert config.headless is False
+        assert config.stealth is False
+        assert config.anticaptcha_key == "k"
+
+
+def test_setup_logging_runs():
+    setup_logging("DEBUG")

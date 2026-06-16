@@ -1,375 +1,50 @@
 import os
 
-from src.core.models import Stock
-from src.io.parser import StockParser
+from src.io.parser import ConsultaParser
+
+MOCK_DIR = os.path.join(os.path.dirname(__file__), "mocks")
 
 
-MOCKS_DIR = os.path.join(os.path.dirname(__file__), "mocks")
-
-
-def _read_mock(filename):
-    with open(os.path.join(MOCKS_DIR, filename), "r", encoding="utf-8") as f:
+def _load(name):
+    with open(os.path.join(MOCK_DIR, name), encoding="utf-8") as f:
         return f.read()
 
 
-class TestStockParserNormalTable:
-    """Tests for parsing a well-formed screener table."""
+class TestParse:
+    def test_parses_table_result(self):
+        parser = ConsultaParser()
+        result = parser.parse(_load("resultado.html"))
 
-    def setup_method(self):
-        self.parser = StockParser()
-        self.html = _read_mock("sample_table.html")
-
-    def test_returns_list_of_stocks(self):
-        result = self.parser.parse(self.html)
-        assert isinstance(result, list)
-        assert all(isinstance(item, Stock) for item in result)
-
-    def test_extracts_correct_number_of_rows(self):
-        result = self.parser.parse(self.html)
-        assert len(result) == 3
-
-    def test_extracts_symbol(self):
-        result = self.parser.parse(self.html)
-        assert result[0].symbol == "AMX.BA"
-        assert result[1].symbol == "NOKA.BA"
-        assert result[2].symbol == "GGAL.BA"
-
-    def test_extracts_name(self):
-        result = self.parser.parse(self.html)
-        assert result[0].name == "América Móvil, S.A.B. de C.V."
-        assert result[1].name == "Nokia Corporation"
-
-    def test_extracts_price(self):
-        result = self.parser.parse(self.html)
-        assert result[0].price == "2089.00"
-        assert result[1].price == "557.50"
-        assert result[2].price == "1450.75"
-
-    def test_each_stock_has_required_attributes(self):
-        result = self.parser.parse(self.html)
-        for stock in result:
-            assert hasattr(stock, "symbol")
-            assert hasattr(stock, "name")
-            assert hasattr(stock, "price")
-
-
-class TestStockParserEmptyTable:
-    """Tests for parsing empty or missing tables."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-
-    def test_empty_tbody_returns_empty_list(self):
-        html = "<html><body><table><thead></thead><tbody></tbody></table></body></html>"
-        result = self.parser.parse(html)
-        assert result == []
-
-    def test_no_table_returns_empty_list(self):
-        html = "<html><body><p>No data</p></body></html>"
-        result = self.parser.parse(html)
-        assert result == []
-
-    def test_empty_html_returns_empty_list(self):
-        html = ""
-        result = self.parser.parse(html)
-        assert result == []
-
-
-class TestStockParserIncompleteData:
-    """Tests for rows with missing or incomplete data."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-
-    def test_row_missing_price_is_skipped(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a data-symbol="TEST">TEST</a></td>
-                <td>Test Corp</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert result == []
-
-    def test_row_missing_name_is_skipped(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a data-symbol="TEST">TEST</a></td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert result == []
-
-    def test_mixed_valid_and_invalid_rows(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a data-symbol="GOOD">GOOD</a></td>
-                <td>Good Corp</td>
-                <td><span data-field="regularMarketPrice">100.00</span></td>
-            </tr>
-            <tr>
-                <td><a data-symbol="BAD">BAD</a></td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
         assert len(result) == 1
-        assert result[0].symbol == "GOOD"
+        c = result[0]
+        assert c.cnpj == "11.222.333/0001-81"
+        assert c.inscricao_estadual == "111.111.111.111"
+        assert c.nome_empresarial == "EMPRESA EXEMPLO LTDA"
+        assert c.situacao_cadastral == "Ativo"
 
+    def test_extras_captured(self):
+        parser = ConsultaParser()
+        c = parser.parse(_load("resultado.html"))[0]
+        assert c.extras.get("municipio") == "SAO PAULO"
 
-class TestStockParserRankingColumn:
-    """Tests for tables with a leading ranking number column."""
+    def test_not_found_returns_empty(self):
+        html = "<html><body>Nenhum registro foi encontrado.</body></html>"
+        assert ConsultaParser().parse(html) == []
 
-    def setup_method(self):
-        self.parser = StockParser()
+    def test_empty_html_returns_empty(self):
+        assert ConsultaParser().parse("<html></html>") == []
 
-    def test_skips_ranking_column(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td>1</td>
-                <td><a data-symbol="PETR4.SA">PETR4.SA</a></td>
-                <td>Petrobras PN</td>
-                <td><span data-field="regularMarketPrice">38.50</span></td>
-            </tr>
-            <tr>
-                <td>2</td>
-                <td><a data-symbol="VALE3.SA">VALE3.SA</a></td>
-                <td>Vale ON</td>
-                <td><span data-field="regularMarketPrice">62.30</span></td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 2
-        assert result[0].symbol == "PETR4.SA"
-        assert result[0].name == "Petrobras PN"
-        assert result[0].price == "38.50"
-        assert result[1].symbol == "VALE3.SA"
-
-    def test_fallback_extract_with_ranking_column(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td>1</td>
-                <td>PETR4.SA</td>
-                <td>Petrobras PN</td>
-                <td>38.50</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].symbol == "PETR4.SA"
-        assert result[0].name == "Petrobras PN"
-        assert result[0].price == "38.50"
-
-    def test_no_ranking_column_offset_is_zero(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a data-symbol="PETR4.SA">PETR4.SA</a></td>
-                <td>Petrobras PN</td>
-                <td><span data-field="regularMarketPrice">38.50</span></td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].symbol == "PETR4.SA"
-
-
-class TestStockParserHrefExtraction:
-    """Tests for extracting symbol from link href when data-symbol is absent."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-
-    def test_extracts_symbol_from_href(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a href="/quote/NVDA/">NVIDIA Corporation</a></td>
-                <td>NVIDIA Corporation</td>
-                <td>175.20</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].symbol == "NVDA"
-        assert result[0].name == "NVIDIA Corporation"
-        assert result[0].price == "175.20"
-
-    def test_extracts_name_from_second_quote_link(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td>1</td>
-                <td><a href="/quote/PETR4.SA/" data-symbol="PETR4.SA">PETR4.SA</a></td>
-                <td><a href="/quote/PETR4.SA/">Petrobras PN</a></td>
-                <td>Chart</td>
-                <td>38.50</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].symbol == "PETR4.SA"
-        assert result[0].name == "Petrobras PN"
-        assert result[0].price == "38.50"
-
-    def test_extracts_price_via_fin_streamer(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a href="/quote/VALE3.SA/" data-symbol="VALE3.SA">VALE3.SA</a></td>
-                <td><a href="/quote/VALE3.SA/">Vale ON</a></td>
-                <td><fin-streamer data-field="regularMarketPrice" data-value="62.30">62.30</fin-streamer></td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].price == "62.30"
-
-
-class TestStockParserYahooScreener:
-    """Tests using a realistic Yahoo Finance equity screener HTML fixture."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-        self.html = _read_mock("screener_table.html")
-
-    def test_extracts_all_rows(self):
-        result = self.parser.parse(self.html)
-        assert len(result) == 3
-
-    def test_extracts_symbols(self):
-        result = self.parser.parse(self.html)
-        assert result[0].symbol == "PETR4.SA"
-        assert result[1].symbol == "VALE3.SA"
-        assert result[2].symbol == "ITUB4.SA"
-
-    def test_extracts_names_from_data_testid_cell(self):
-        result = self.parser.parse(self.html)
-        assert result[0].name == "Petróleo Brasileiro S.A. - Petrobras"
-        assert result[1].name == "Vale S.A."
-        assert result[2].name == "Itaú Unibanco Holding S.A."
-
-    def test_extracts_prices_from_fin_streamer(self):
-        result = self.parser.parse(self.html)
-        assert result[0].price == "38.50"
-        assert result[1].price == "62.30"
-        assert result[2].price == "8.05"
-
-
-class TestStockParserMultipleTables:
-    """Tests for selecting the main table when multiple tables exist."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-
-    def test_selects_table_with_most_rows(self):
+    def test_parses_aspnet_label_spans(self):
         html = """
         <html><body>
-        <table><tbody><tr><td>sidebar</td></tr></tbody></table>
-        <table><tbody>
-            <tr>
-                <td><a data-symbol="PETR4.SA">PETR4.SA</a></td>
-                <td>Petrobras</td>
-                <td>38.50</td>
-            </tr>
-            <tr>
-                <td><a data-symbol="VALE3.SA">VALE3.SA</a></td>
-                <td>Vale</td>
-                <td>62.30</td>
-            </tr>
-        </tbody></table>
+          <span id="ctl00_conteudoPrincipal_lblCNPJ">11.222.333/0001-81</span>
+          <span id="ctl00_conteudoPrincipal_lblNomeEmpresarial">ACME SA</span>
         </body></html>
         """
-        result = self.parser.parse(html)
-        assert len(result) == 2
-        assert result[0].symbol == "PETR4.SA"
+        c = ConsultaParser().parse(html)[0]
+        assert c.cnpj == "11.222.333/0001-81"
+        assert c.nome_empresarial == "ACME SA"
 
-
-class TestStockParserTitleExtraction:
-    """Tests for extracting company name from title attribute."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-
-    def test_extracts_name_from_div_title(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a data-symbol="PETR4.SA">PETR4.SA</a></td>
-                <td><div title="Petróleo Brasileiro S.A.">Petróleo Bra...</div></td>
-                <td>38.50</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].name == "Petróleo Brasileiro S.A."
-
-
-class TestStockParserTickerRegex:
-    """Tests for extracting symbol via ticker regex pattern."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-
-    def test_extracts_ticker_from_link_text(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a href="/other/">NVDA</a></td>
-                <td>NVIDIA Corporation</td>
-                <td>175.20</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].symbol == "NVDA"
-
-
-class TestStockParserCommaFormattedPrices:
-    """Tests for prices with comma formatting."""
-
-    def setup_method(self):
-        self.parser = StockParser()
-
-    def test_extracts_comma_formatted_price(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a data-symbol="BRK-A">BRK-A</a></td>
-                <td>Berkshire Hathaway</td>
-                <td>714,977.00</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].price == "714,977.00"
-
-    def test_extracts_simple_price(self):
-        html = """
-        <html><body><table><tbody>
-            <tr>
-                <td><a data-symbol="AAPL">AAPL</a></td>
-                <td>Apple Inc.</td>
-                <td>252.62</td>
-            </tr>
-        </tbody></table></body></html>
-        """
-        result = self.parser.parse(html)
-        assert len(result) == 1
-        assert result[0].price == "252.62"
+    def test_result_without_cnpj_ignored(self):
+        html = "<table><tr><th>Município:</th><td>SP</td></tr></table>"
+        assert ConsultaParser().parse(html) == []

@@ -34,6 +34,18 @@ class IDriver(ABC):
         ...
 
     @abstractmethod
+    def type_text(self, element: Any, text: str) -> None:
+        ...
+
+    @abstractmethod
+    def select_option(self, selector: str, value: str) -> None:
+        ...
+
+    @abstractmethod
+    def screenshot_element(self, element: Any) -> bytes:
+        ...
+
+    @abstractmethod
     def get_html(self) -> str:
         ...
 
@@ -50,8 +62,16 @@ class IDriver(ABC):
         ...
 
 
+class ICaptchaSolver(ABC):
+    """Interface para serviços de resolução de captcha de imagem."""
+
+    @abstractmethod
+    def solve(self, image_bytes: bytes) -> str:
+        ...
+
+
 class IParser(ABC):
-    """Interface para parsers de dados de ações."""
+    """Interface para parsers do resultado da consulta."""
 
     @abstractmethod
     def parse(self, html: str) -> list:
@@ -70,5 +90,5 @@ class ICrawler(ABC):
     """Interface para o crawler."""
 
     @abstractmethod
-    def crawl(self, region: str, output_path: Optional[str] = None) -> list:
+    def crawl(self, cnpj: str, output_path: Optional[str] = None) -> list:
         ...

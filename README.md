@@ -4,7 +4,7 @@ Crawler que extrai dados da [Consulta Pública do CADESP](https://www.cadesp.faz
 
 O site é um **ASP.NET Web Forms** protegido por um firewall **F5 BIG-IP** (inspeção de fingerprint do navegador) e exige a resolução de um **captcha de imagem**. Por isso o projeto usa:
 
-- **Selenium** (com `undetected-chromedriver` quando disponível) para dirigir um Chrome o mais "stealth" possível e contornar o bloqueio do F5 BIG-IP.
+- **Playwright** (Chromium) para dirigir o navegador de forma o mais "stealth" possível e contornar o bloqueio do F5 BIG-IP. Quando o firewall bloqueia, a sessão é **recuperada** automaticamente trocando a impressão digital (User-Agent, viewport, locale e timezone) e tentando novamente com backoff.
 - **AntiCaptcha** (`anticaptchaofficial`, tarefa *Image-to-Text*) para resolver o captcha.
 - **BeautifulSoup + lxml** para parsear o resultado.
 
@@ -14,7 +14,7 @@ Teste técnico — **Desenvolvedor Python Sênior** na **Verx**.
 
 ## Como executar
 
-**Pré-requisito:** Google Chrome instalado e uma chave de API do [Anti-Captcha](https://anti-captcha.com/).
+**Pré-requisito:** uma chave de API do [Anti-Captcha](https://anti-captcha.com/). O navegador (Chromium) é instalado pelo próprio Playwright.
 
 ```bash
 git clone https://github.com/pradovncs/teste-tecnico-verx.git
@@ -22,11 +22,13 @@ cd teste-tecnico-verx
 
 # Com Poetry
 poetry install
+poetry run playwright install chromium
 export ANTICAPTCHA_KEY="sua_chave_aqui"
 poetry run python main.py --cnpj "11.222.333/0001-81"
 
 # Com pip
 pip install -r requirements.txt
+playwright install chromium
 export ANTICAPTCHA_KEY="sua_chave_aqui"
 python main.py --cnpj "11.222.333/0001-81"
 ```
@@ -53,14 +55,14 @@ poetry run pytest tests/ -v
 poetry run pytest tests/ --cov=src --cov-report=term-missing
 ```
 
-Os testes rodam sem abrir navegador real nem acessar a rede (Selenium e AntiCaptcha são mockados).
+Os testes rodam sem abrir navegador real nem acessar a rede (Playwright e AntiCaptcha são mockados).
 
 ---
 
 ## Tecnologias
 
 - **Python 3.10+**
-- **Selenium 4** + **undetected-chromedriver** — automação stealth do Chrome
+- **Playwright** (Chromium) — automação stealth do navegador
 - **anticaptchaofficial** — resolução do captcha de imagem
 - **BeautifulSoup 4 + lxml** — parsing do HTML de resultado
 - **Poetry** — dependências e virtualenv
@@ -81,8 +83,8 @@ src/
 ├── captcha/
 │   └── solver.py          # AntiCaptchaSolver (anticaptchaofficial)
 ├── scraping/              # Automação do navegador
-│   ├── driver.py          # StealthBrowserDriver — Selenium stealth
-│   ├── stealth.py         # Argumentos e script anti-fingerprint (F5 BIG-IP)
+│   ├── driver.py          # StealthBrowserDriver — Playwright stealth + recover()
+│   ├── stealth.py         # Args, fingerprint e init script anti-detecção (F5 BIG-IP)
 │   └── consulta.py        # CnpjConsulta — dropdown + CNPJ + captcha + submit
 ├── io/
 │   ├── parser.py          # ConsultaParser — HTML → Contribuinte
@@ -99,14 +101,14 @@ main.py                    # CLI
 
 ### Stealth contra o F5 BIG-IP
 
-O F5 BIG-IP ASM bloqueia automações detectando sinais como `navigator.webdriver`, ausência de plugins/idiomas e a flag `enable-automation` do Chrome. As contramedidas em `scraping/stealth.py` e `scraping/driver.py`:
+O F5 BIG-IP ASM bloqueia automações detectando sinais como `navigator.webdriver`, ausência de plugins/idiomas e flags de automação do Chrome. As contramedidas em `scraping/stealth.py` e `scraping/driver.py`:
 
-- Usam `undetected-chromedriver` quando instalado (recai sobre Selenium puro caso contrário).
-- Removem `enable-automation` e `--disable-blink-features=AutomationControlled`.
-- Injetam, via CDP (`Page.addScriptToEvaluateOnNewDocument`), um script que mascara `navigator.webdriver`, `languages` (pt-BR), `plugins`, `chrome.runtime` e o renderer WebGL.
-- Definem User-Agent e locale realistas e aplicam **atrasos aleatórios** e digitação caractere a caractere para imitar comportamento humano.
+- Usam o **Chromium do Playwright**, controlado via CDP nativo (mais difícil de detectar que o Selenium) e sem a flag `enable-automation`.
+- Aplicam `--disable-blink-features=AutomationControlled` e demais flags de launch.
+- Injetam, via `add_init_script` (antes de qualquer script da página), um script que mascara `navigator.webdriver`, `languages` (pt-BR), `plugins`, `chrome.runtime` e o renderer WebGL.
+- Definem User-Agent, viewport, locale (pt-BR) e timezone (America/Sao_Paulo) realistas por contexto e aplicam **atrasos aleatórios** e digitação caractere a caractere para imitar comportamento humano.
 
-Quando o firewall ainda assim bloqueia, a resposta contém o texto *"The requested URL was rejected… Support ID"*; isso é detectado e levanta `BlockedError` (sem retentar imediatamente).
+Quando o firewall ainda assim bloqueia, a resposta contém o texto *"The requested URL was rejected… Support ID"*; isso é detectado e levanta `BlockedError`. O crawler então **recupera a sessão** via `driver.recover()` — que recria o contexto do navegador com uma nova impressão digital (User-Agent, viewport, locale, timezone) e descarta cookies — e tenta novamente, com **backoff exponencial**, até `max_block_attempts` vezes.
 
 ### Captcha com AntiCaptcha
 

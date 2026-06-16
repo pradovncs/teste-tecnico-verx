@@ -24,6 +24,16 @@ class CrawlerConfig:
     )
     # Quantas vezes tentar resolver o captcha antes de desistir.
     max_captcha_attempts: int = 3
+    # Quantas vezes tentar contornar um bloqueio do F5 BIG-IP (com novo
+    # fingerprint e backoff) antes de desistir.
+    max_block_attempts: int = 3
+    # Backoff (segundos) entre tentativas após um bloqueio: cresce
+    # exponencialmente a partir de ``block_backoff_base`` até ``block_backoff_max``.
+    block_backoff_base: float = 2.0
+    block_backoff_max: float = 30.0
+
+    # Navegador do Playwright a usar ("chromium", "firefox" ou "webkit").
+    browser: str = "chromium"
 
     # Stealth — desligar para depuração.
     stealth: bool = True
